@@ -5,6 +5,13 @@ import { createWorker } from 'tesseract.js';
 import type { Book } from './types';
 import { fetchAsBlob, getActiveTab } from './utils';
 
+/**
+ * jsPDF builds the whole document as ONE string, and Chrome caps a string at ~512MB
+ * ("RangeError: Invalid string length"). Saving a separate file every N pages keeps
+ * each document well under that limit.
+ */
+const PAGES_PER_FILE = 100;
+
 export async function createPDF(
   book: Book,
   onProgress?: (percent: number) => void,
@@ -52,11 +59,38 @@ export async function createPDF(
       throw new Error(errorMessage);
     }
 
-    const pdf = new jsPDF('p', 'pt', 'a4'); // portrait, points, A4 size
-    let isFirstPage = true;
-
     const totalPages = imagePages.length;
     let processed = 0;
+
+    // File name (read the tab title up front: parts are saved while the loop is still running)
+    const activeTab = await getActiveTab();
+    const title = activeTab ? activeTab.title : book.url;
+    const totalFiles = Math.ceil(totalPages / PAGES_PER_FILE);
+
+    let pdf = new jsPDF('p', 'pt', 'a4'); // portrait, points, A4 size
+    let pagesInFile = 0; // pages actually added to the current file
+    let fileIndex = 1;
+    let firstPageOfFile = 1; // position (1-based) in the capture list where the current file starts
+
+    // Save the current file, then start a fresh jsPDF so the finished one can be garbage-collected
+    const savePart = async (lastPageOfFile: number) => {
+      const filename =
+        totalFiles === 1
+          ? `${title}_${totalPages}pages.pdf`
+          : `${title}_part${String(fileIndex).padStart(2, '0')}of${String(totalFiles).padStart(2, '0')}` +
+            `_p${firstPageOfFile}-${lastPageOfFile}.pdf`;
+
+      onLog?.(`Saving file ${fileIndex} of ${totalFiles}: ${filename}`);
+      pdf.save(filename);
+
+      pdf = new jsPDF('p', 'pt', 'a4');
+      pagesInFile = 0;
+      fileIndex++;
+      firstPageOfFile = lastPageOfFile + 1;
+
+      // Small pause so the browser doesn't drop back-to-back downloads
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    };
 
     for (const pageUrl of imagePages) {
       onLog?.(`Processing page ${processed + 1} of ${totalPages}`);
@@ -73,11 +107,10 @@ export async function createPDF(
             const imgWidth = img.width;
             const imgHeight = img.height;
 
-            if (!isFirstPage) {
+            if (pagesInFile > 0) {
               pdf.addPage();
-            } else {
-              isFirstPage = false;
             }
+            pagesInFile++;
 
             // Calculate dimensions to fit the page
             const pageWidth = pdf.internal.pageSize.getWidth();
@@ -139,6 +172,11 @@ export async function createPDF(
       }
 
       processed++;
+
+      if (pagesInFile >= PAGES_PER_FILE) {
+        await savePart(processed);
+      }
+
       const percent = Math.round((processed / totalPages) * 100);
       onProgress?.(percent);
 
@@ -153,14 +191,12 @@ export async function createPDF(
       }
     }
 
-    // File name
-    const activeTab = await getActiveTab();
-    const title = activeTab ? activeTab.title : book.url;
-    const filename = `${title}_${totalPages}pages.pdf`;
+    // Save whatever is left (the last, possibly shorter, file)
+    if (pagesInFile > 0) {
+      await savePart(processed);
+    }
 
     onLog?.('PDF generation complete.');
-    onLog?.('Starting PDF download.');
-    pdf.save(filename);
     await worker.terminate();
     URL.revokeObjectURL(workerUrl);
     onLog?.('PDF download complete.');
