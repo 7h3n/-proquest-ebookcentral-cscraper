@@ -9,7 +9,8 @@ export default defineConfig({
     plugins: [stripCdnPlugin()],
   }),
   manifest: ({ browser }) => {
-    const permissions: string[] = ['storage', 'scripting', 'tabs', 'webRequest', 'webRequestBlocking'];
+    // No listener blocks or changes requests, so 'webRequestBlocking' isn't needed (Chrome MV3 rejects it anyway)
+    const permissions: string[] = ['storage', 'scripting', 'tabs', 'webRequest'];
     switch (browser) {
       case 'chrome':
         permissions.push('declarativeContent');
