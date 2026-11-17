@@ -1,48 +1,29 @@
 import { jsPDF } from 'jspdf';
-import type { Worker, Word } from 'tesseract.js';
-import { createWorker } from 'tesseract.js';
 
 import type { Book } from './types';
 import { fetchAsBlob, getActiveTab } from './utils';
 
 /**
  * jsPDF builds the whole document as ONE string, and Chrome caps a string at ~512MB
- * ("RangeError: Invalid string length"). Saving a separate file every N pages keeps
- * each document well under that limit.
+ * ("RangeError: Invalid string length"). Images are almost all of that size, so a new file is
+ * started once the images already in the current one reach this many bytes. Splitting by
+ * page count doesn't work: zoomed-in pages are much bigger images than normal ones.
+ * The ~360MB of headroom left covers the rest of the PDF structure.
  */
-const PAGES_PER_FILE = 100;
+const MAX_IMAGE_BYTES_PER_FILE = 150 * 1024 * 1024;
+
+/** Byte size of the data behind a base64 data URL, without decoding it */
+const dataURLBytes = (dataURL: string) => Math.floor(((dataURL.length - dataURL.indexOf(',') - 1) * 3) / 4);
 
 export async function createPDF(
   book: Book,
   onProgress?: (percent: number) => void,
   onLog?: (msg: string) => void,
   onError?: (err: string) => void,
-  useOCR = true,
   onEstimatedTime?: (time: string | null) => void,
 ): Promise<jsPDF> {
-  let worker: Worker | null = null;
-  let workerUrl: string | null = null;
-
   try {
-    onLog?.('Initialising Tesseract.js.');
-
     const startTime = Date.now();
-
-    const workerCode = await fetch(chrome.runtime.getURL('tesseract/worker.min.js')).then((res) => res.text());
-    const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-    workerUrl = URL.createObjectURL(workerBlob);
-
-    worker = await createWorker({
-      workerPath: chrome.runtime.getURL('tesseract/worker.min.js'),
-      corePath: chrome.runtime.getURL('/tesseract/tesseract-core.wasm.js'),
-      langPath: chrome.runtime.getURL('tesseract/'),
-      logger: (m) => console.log(m),
-      workerBlobURL: false, // Prevents tesseract falling back to external CDN
-    });
-
-    await worker.load();
-    await worker.loadLanguage('eng');
-    await worker.initialize('eng');
 
     if (!book.pages || book.pages.length === 0) {
       const err = 'No pages to create PDF';
@@ -65,26 +46,27 @@ export async function createPDF(
     // File name (read the tab title up front: parts are saved while the loop is still running)
     const activeTab = await getActiveTab();
     const title = activeTab ? activeTab.title : book.url;
-    const totalFiles = Math.ceil(totalPages / PAGES_PER_FILE);
 
     let pdf = new jsPDF('p', 'pt', 'a4'); // portrait, points, A4 size
     let pagesInFile = 0; // pages actually added to the current file
+    let bytesInFile = 0; // image bytes already in the current file
     let fileIndex = 1;
     let firstPageOfFile = 1; // position (1-based) in the capture list where the current file starts
 
     // Save the current file, then start a fresh jsPDF so the finished one can be garbage-collected
     const savePart = async (lastPageOfFile: number) => {
-      const filename =
-        totalFiles === 1
-          ? `${title}_${totalPages}pages.pdf`
-          : `${title}_part${String(fileIndex).padStart(2, '0')}of${String(totalFiles).padStart(2, '0')}` +
-            `_p${firstPageOfFile}-${lastPageOfFile}.pdf`;
+      // The number of files isn't known in advance any more (it depends on image sizes)
+      const isWholeBook = fileIndex === 1 && firstPageOfFile === 1 && lastPageOfFile === totalPages;
+      const filename = isWholeBook
+        ? `${title}_${totalPages}pages.pdf`
+        : `${title}_part${String(fileIndex).padStart(2, '0')}_p${firstPageOfFile}-${lastPageOfFile}.pdf`;
 
-      onLog?.(`Saving file ${fileIndex} of ${totalFiles}: ${filename}`);
+      onLog?.(`Saving file ${fileIndex} (${Math.round(bytesInFile / 1024 / 1024)}MB of images): ${filename}`);
       pdf.save(filename);
 
       pdf = new jsPDF('p', 'pt', 'a4');
       pagesInFile = 0;
+      bytesInFile = 0;
       fileIndex++;
       firstPageOfFile = lastPageOfFile + 1;
 
@@ -97,13 +79,19 @@ export async function createPDF(
 
       try {
         const blobURI = await fetchAsBlob(pageUrl);
+        const pageBytes = dataURLBytes(blobURI);
+
+        // Close the current file first if this page would push it over the size budget
+        if (pagesInFile > 0 && bytesInFile + pageBytes > MAX_IMAGE_BYTES_PER_FILE) {
+          await savePart(processed);
+        }
         const img = new Image();
         img.src = blobURI;
 
         await new Promise<void>((imgLoadResolve) => {
           let lastBlobUrl: string | null = null;
 
-          img.onload = async () => {
+          img.onload = () => {
             const imgWidth = img.width;
             const imgHeight = img.height;
 
@@ -111,6 +99,7 @@ export async function createPDF(
               pdf.addPage();
             }
             pagesInFile++;
+            bytesInFile += pageBytes;
 
             // Calculate dimensions to fit the page
             const pageWidth = pdf.internal.pageSize.getWidth();
@@ -123,30 +112,6 @@ export async function createPDF(
             const offsetY = (pageHeight - scaledHeight) / 2;
 
             pdf.addImage(img, 'JPEG', offsetX, offsetY, scaledWidth, scaledHeight);
-
-            // Perform OCR on image if enabled
-            if (useOCR) {
-              onLog?.(`OCR page ${processed + 1}`);
-              try {
-                if (!worker) {
-                  throw new Error('Tesseract worker not initialized');
-                }
-                const { data } = await worker.recognize(img);
-
-                pdf.setFontSize(10);
-
-                data.words.forEach((word: Word) => {
-                  const { bbox } = word;
-                  const x = offsetX + bbox.x0 * ratio;
-                  const y = offsetY + bbox.y1 * ratio; // y1 is the bottom of the line where the highlight should begin
-                  pdf.text(word.text, x, y, { renderingMode: 'invisible' });
-                });
-              } catch (ocrErr) {
-                onLog?.(
-                  `OCR failed for page ${processed + 1}: ${ocrErr instanceof Error ? ocrErr.message : 'Unknown error'}`,
-                );
-              }
-            }
 
             //Free blobs after images are added to prevent memory overload
             //Queue last cycle's blob otherwise errors are thrown
@@ -173,10 +138,6 @@ export async function createPDF(
 
       processed++;
 
-      if (pagesInFile >= PAGES_PER_FILE) {
-        await savePart(processed);
-      }
-
       const percent = Math.round((processed / totalPages) * 100);
       onProgress?.(percent);
 
@@ -196,17 +157,10 @@ export async function createPDF(
       await savePart(processed);
     }
 
-    onLog?.('PDF generation complete.');
-    await worker.terminate();
-    URL.revokeObjectURL(workerUrl);
     onLog?.('PDF download complete.');
     onEstimatedTime?.(null);
     return pdf;
   } catch (e: unknown) {
-    await worker?.terminate();
-    if (workerUrl) {
-      URL.revokeObjectURL(workerUrl);
-    }
     onEstimatedTime?.(null);
     const message = `Fatal error: ${e instanceof Error ? e.message : 'Unknown error'}`;
     onError?.(message);

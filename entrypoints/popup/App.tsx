@@ -6,9 +6,7 @@ import { createPDF } from '../../components/pdf';
 import type { Book, ScraperMessage, ClearBook, UpdatePageOrder, SaveBook } from '../../components/types';
 import { getURL, getBookURL, getBook } from '../../components/utils';
 
-import { Page, ResetButton, Checkbox, Tooltip } from './Components';
-
-declare const __APP_VERSION__: string;
+import { Page, ResetButton, Checkbox } from './Components';
 
 export const App: FC = () => {
   console.log('Popup component rendering...');
@@ -18,7 +16,6 @@ export const App: FC = () => {
   const [progress, setProgress] = useState<number>(0);
   const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [useOCR, setUseOCR] = useState<boolean>(true);
   const [estimatedTime, setEstimatedTime] = useState<string | null>(null);
 
   const addLog = (msg: string) => {
@@ -79,7 +76,7 @@ export const App: FC = () => {
     setError(null);
 
     try {
-      await createPDF(book, setProgress, addLog, setError, useOCR, setEstimatedTime);
+      await createPDF(book, setProgress, addLog, setError, setEstimatedTime);
       console.log('PDF created successfully');
     } catch (e: unknown) {
       console.error('Download error:', e);
@@ -220,12 +217,6 @@ export const App: FC = () => {
               <ResetButton reset={() => void reset()}>Reset</ResetButton>
             </HStack>
 
-            <Checkbox checked={useOCR} onChange={() => setUseOCR((prev) => !prev)}>
-              <Tooltip content="Enabling OCR will make the PDF text searchable and allow it to be highlighted and copied, but may increase processing time.">
-                Enable OCR
-              </Tooltip>
-            </Checkbox>
-
             <Checkbox checked={displayPages} onChange={() => toggleDisplayPages()}>
               Show captured pages
             </Checkbox>
@@ -309,26 +300,6 @@ export const App: FC = () => {
           </VStack>
         )}
       </VStack>
-      <Box mt={4} textAlign="center" fontSize="xs" color="gray.500">
-        Version: {__APP_VERSION__} |{' '}
-        <a
-          href="https://github.com/janbaykara/ebook-scraper/issues"
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: 'blue' }}
-        >
-          Report an issue
-        </a>{' '}
-        |{' '}
-        <a
-          href="https://github.com/janbaykara/ebook-scraper"
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: 'blue' }}
-        >
-          GitHub
-        </a>
-      </Box>
     </Box>
   );
 };
