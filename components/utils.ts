@@ -53,9 +53,28 @@ export const getBook = (url: string): Promise<Book | null> =>
     });
   });
 
+/**
+ * A page image could not be downloaded at all (network error, HTTP error, or a web page came back
+ * instead of an image). With a library proxy this almost always means the login session expired,
+ * so every page after it will fail too.
+ */
+export class PageFetchError extends Error {}
+
 export async function fetchAsBlob(path: string): Promise<string> {
-  const res = await fetch(path);
+  let res: Response;
+  try {
+    res = await fetch(path);
+  } catch (err) {
+    // "Failed to fetch": e.g. the proxy redirected to its login page, which the extension can't read
+    throw new PageFetchError(err instanceof Error ? err.message : 'Failed to fetch');
+  }
+  if (!res.ok) {
+    throw new PageFetchError(`HTTP ${res.status}`);
+  }
   const blob = await res.blob();
+  if (blob.type.includes('html')) {
+    throw new PageFetchError('Got a web page instead of an image');
+  }
   const reader = new FileReader();
   return await new Promise<string>((resolve) => {
     reader.onload = (event) => {

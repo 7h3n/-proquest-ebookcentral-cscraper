@@ -1,7 +1,7 @@
 import { jsPDF } from 'jspdf';
 
 import type { Book } from './types';
-import { fetchAsBlob, getActiveTab } from './utils';
+import { fetchAsBlob, getActiveTab, PageFetchError } from './utils';
 
 /**
  * jsPDF builds the whole document as ONE string, and Chrome caps a string at ~512MB
@@ -52,6 +52,7 @@ export async function createPDF(
     let bytesInFile = 0; // image bytes already in the current file
     let fileIndex = 1;
     let firstPageOfFile = 1; // position (1-based) in the capture list where the current file starts
+    let stoppedAtPage: number | null = null; // set when a page can't be downloaded and we give up
 
     // Save the current file, then start a fresh jsPDF so the finished one can be garbage-collected
     const savePart = async (lastPageOfFile: number) => {
@@ -130,6 +131,14 @@ export async function createPDF(
           };
         });
       } catch (err: unknown) {
+        if (err instanceof PageFetchError) {
+          // The session has most likely expired, so every later page would fail too.
+          // Stop here and still save the pages that were already downloaded.
+          stoppedAtPage = processed + 1;
+          onLog?.(`Could not download page ${stoppedAtPage} (${err.message}). Stopping.`);
+          break;
+        }
+
         const errorMessage = `Error processing page ${processed + 1}: ${err instanceof Error ? err.message : 'Unknown error'}`;
 
         onLog?.(errorMessage);
@@ -156,9 +165,21 @@ export async function createPDF(
     if (pagesInFile > 0) {
       await savePart(processed);
     }
+    onEstimatedTime?.(null);
+
+    if (stoppedAtPage !== null) {
+      const saved = stoppedAtPage > 1 ? `Pages 1-${stoppedAtPage - 1} were saved. ` : 'No pages were saved. ';
+      const message =
+        `Stopped at page ${stoppedAtPage} of ${totalPages}: it could not be downloaded. ` +
+        saved +
+        'Your library login has probably expired: reload the book (log in again if asked), ' +
+        `press Reset, then capture again from page ${stoppedAtPage}.`;
+      onLog?.(message);
+      onError?.(message);
+      return pdf;
+    }
 
     onLog?.('PDF download complete.');
-    onEstimatedTime?.(null);
     return pdf;
   } catch (e: unknown) {
     onEstimatedTime?.(null);
