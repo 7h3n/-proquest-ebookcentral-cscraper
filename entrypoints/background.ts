@@ -47,16 +47,13 @@ export default defineBackground(() => {
     browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       if (changeInfo.status === 'complete' && tab.url) {
         const url = new URL(tab.url);
-        const enabledSites = new Set(
-          sites.map((site) =>
-            typeof site.readerDomain === 'string'
-              ? site.readerDomain
-              : site.readerDomain.hostEquals || site.readerDomain.hostContains,
-          ),
+        // Match on the site's host as well: JStor's readerDomain only has urlContains, no host
+        const shouldShow = sites.some(
+          (site) =>
+            url.hostname === site.host ||
+            url.hostname === site.readerDomain.hostEquals ||
+            (!!site.readerDomain.hostContains && url.hostname.includes(site.readerDomain.hostContains)),
         );
-        const shouldShow =
-          enabledSites.has(url.hostname) ||
-          Array.from(enabledSites).some((domain) => domain && url.hostname.includes(domain));
 
         if (shouldShow) {
           actionAPI.enable(tabId).catch((e) => console.error('Error enabling action', e));

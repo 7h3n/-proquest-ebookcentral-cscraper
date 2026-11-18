@@ -1,59 +1,41 @@
 # eBook Scraper
 
-A modern browser extension to help you create PDFs from ebooks hosted on supported academic platforms.
+> **Requires Node.js 22:** download it from **https://nodejs.org/en/download** (pick **v22.x**).
 
-### Supported Platforms
-- JStor
-- Ebook Central by ProQuest
+A browser extension that saves books from **ProQuest Ebook Central** and **JStor** as PDF. Forked from [janbaykara/ebook-scraper](https://github.com/janbaykara/ebook-scraper).
 
-### Supported Browsers
-- Chrome
-- Firefox
+**Sites:** Ebook Central (`ebookcentral.proquest.com`, La Trobe and Binghamton proxies), JStor (`www.jstor.org`)
+**Browsers:** Chrome / Chromium-based (Edge, Brave, …), Firefox
 
-*This extension likely works on most Chromium and Firefox based browsers, though it's only been tested on those above*
+## Build
 
-<a href="https://chromewebstore.google.com/detail/ebook-scraper/bhoifjhgahfmjkonopmmfifdfjacjeak">
-<img src="https://developer.chrome.com/static/docs/webstore/branding/image/UV4C4ybeBTsZt43U4xis.png" title="Available in the Chrome Web Store" />
-</a>
+```bash
+git clone https://github.com/7h3n/ebookcentral-cscraper.git
+cd ebookcentral-cscraper
+npm install
+npm run build            # Chrome  → .output/chrome-mv3/
+npm run build:firefox    # Firefox → .output/firefox-mv2/
+```
 
-![Screenshot](screenshot.png)
+## Install
 
-## Usage
+**Chrome / Edge / Brave:** open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and select `.output/chrome-mv3`.
 
-1. Navigate to a supported ebook platform (ProQuest, JStor).
-2. Open an ebook you want to scrape.
-3. Click through each page as they load to capture images.
-4. Click the **eBook Scraper** extension icon in your toolbar.
-5. Use the popup interface to save pages and compile your PDF.
+**Firefox:** open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on…** and select `.output/firefox-mv2/manifest.json`. It is removed when Firefox closes.
 
-![Screenshot](screenshot2.png)
+After changing the code, run the build again and click **Reload** on the extension.
 
+## Use
 
-Note: Attempting to save very large ebooks may max out your computer's RAM and cause the browser to crash. Consider saving large ebooks in seperate blocks and collate later.
+1. Log in to your library and open a book.
+2. Turn through the pages: each page is captured once it loads.
+3. Click the extension icon, then **Download PDF**.
 
-## Developer Instructions
+![Popup](screenshot2.png)
 
-### Prerequisites
-- **Node.js** (v18.0 or higher).
+- Large books are saved as several files (`<title>_part01_p1-120.pdf`, …) so the browser doesn't run out of memory.
+- If a page fails to download (usually an expired library login), the extension stops and saves the pages before it as a PDF. To get the rest: reload the book (log in again if asked), press **Reset** to clear the old, expired captures, turn through the pages again from the failed page, and download. This gives a second PDF; merge the two afterwards.
 
-### Prepare the Local Environment
+## License
 
-1. **Clone the repository and install dependencies**
-   ```bash
-   git clone https://github.com/janbaykara/ebook-scraper.git
-   cd ebook-scraper
-   npm install
-   npx wxt-prepare
-2. **Launch the extension automatically with hot-reloading**
-   ```bash
-   npx wxt                    #Chrome
-   npx wxt -b firefox         #Firefox
-3. **Build files for production**
-   ```bash
-   npx wxt build              #Chrome
-   npx wxt build -b firefox   #Firefox
-
-## Acknowledgements
-This project is built using the following open-source libraries:
-- [WXT](https://github.com/wxt-dev/wxt)
-- [jsPDF](https://github.com/parallax/jsPDF)
+MIT, see [LICENSE.md](LICENSE.md). Built with [WXT](https://github.com/wxt-dev/wxt) and [jsPDF](https://github.com/parallax/jsPDF).

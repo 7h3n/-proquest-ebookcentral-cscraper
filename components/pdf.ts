@@ -68,14 +68,8 @@ export async function createPDF(
       throw new Error(err);
     }
 
-    // Filter out non-image URLs
-    const imagePages = book.pages.filter((url) => url.includes('/docImage.action') && url.includes('encrypted='));
-
-    if (imagePages.length === 0) {
-      const errorMessage = 'No valid image pages found';
-      onError?.(errorMessage);
-      throw new Error(errorMessage);
-    }
+    // Every captured URL was already checked by its site's testPageImageURL when it was saved
+    const imagePages = book.pages;
 
     const totalPages = imagePages.length;
     let processed = 0;

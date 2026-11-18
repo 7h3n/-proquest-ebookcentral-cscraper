@@ -158,8 +158,8 @@ export const App: FC = () => {
 
   console.log('Rendering popup with book:', book);
 
-  // Filter out only actual image pages for display
-  const imagePages = book?.pages?.filter((url) => url.includes('/docImage.action') && url.includes('encrypted=')) || [];
+  // Every captured URL was already checked by its site's testPageImageURL when it was saved
+  const imagePages = book?.pages ?? [];
 
   return (
     <Box
@@ -183,9 +183,6 @@ export const App: FC = () => {
             <Box textAlign="center">
               <Text fontSize="md" fontWeight="bold" color="gray.800">
                 Total captures: {book.pages?.length || 0}
-              </Text>
-              <Text fontSize="sm" color="gray.600">
-                Valid images: {imagePages.length}
               </Text>
               <Text>
                 Use in a fullscreen window with pages zoomed for best quality.{' '}
@@ -291,9 +288,6 @@ export const App: FC = () => {
           </VStack>
         ) : (
           <VStack gap={3} textAlign="center" py={8}>
-            <Text fontSize="xl" color="gray.600">
-              Navigate to a ProQuest ebook
-            </Text>
             <Text fontSize="sm" color="gray.500">
               Start reading pages to begin capturing images
             </Text>
