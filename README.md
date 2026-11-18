@@ -4,7 +4,8 @@
 
 A browser extension that saves books from **ProQuest Ebook Central** and **JStor** as PDF. Forked from [janbaykara/ebook-scraper](https://github.com/janbaykara/ebook-scraper).
 
-**Sites:** Ebook Central (`ebookcentral.proquest.com`, La Trobe and Binghamton proxies), JStor (`www.jstor.org`)
+**Sites:** Ebook Central (`ebookcentral.proquest.com`, La Trobe & Binghamton proxies), JStor (`www.jstor.org`)
+
 **Browsers:** Chrome / Chromium-based (Edge, Brave, …), Firefox
 
 ## Build
