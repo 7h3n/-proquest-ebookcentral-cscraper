@@ -60,7 +60,37 @@ export const getBook = (url: string): Promise<Book | null> =>
  */
 export class PageFetchError extends Error {}
 
-export async function fetchAsBlob(path: string): Promise<string> {
+export type ImageFormat = 'JPEG' | 'PNG' | 'GIF' | 'WEBP';
+
+/** Work out the real image format from the first bytes (don't trust the Content-Type header) */
+export function sniffImageFormat(bytes: Uint8Array): ImageFormat | null {
+  const startsWith = (...signature: number[]) => signature.every((byte, i) => bytes[i] === byte);
+  if (startsWith(0xff, 0xd8, 0xff)) {
+    return 'JPEG';
+  }
+  if (startsWith(0x89, 0x50, 0x4e, 0x47)) {
+    return 'PNG';
+  }
+  if (startsWith(0x47, 0x49, 0x46, 0x38)) {
+    return 'GIF';
+  }
+  if (startsWith(0x52, 0x49, 0x46, 0x46) && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42) {
+    return 'WEBP';
+  }
+  return null;
+}
+
+export type PageImage = {
+  blob: Blob;
+  bytes: Uint8Array;
+  format: ImageFormat;
+};
+
+/**
+ * Download one page image. Throws PageFetchError when the page can't be downloaded or the server
+ * sends back something that isn't an image (an error or login page): later pages would fail too.
+ */
+export async function fetchPageImage(path: string): Promise<PageImage> {
   let res: Response;
   try {
     res = await fetch(path);
@@ -72,25 +102,14 @@ export async function fetchAsBlob(path: string): Promise<string> {
     throw new PageFetchError(`HTTP ${res.status}`);
   }
   const blob = await res.blob();
-  if (blob.type.includes('html')) {
-    throw new PageFetchError('Got a web page instead of an image');
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const format = sniffImageFormat(bytes);
+  if (!format) {
+    throw new PageFetchError(
+      `The server sent something that isn't an image (${blob.type || 'unknown type'}, ${bytes.byteLength} bytes)`,
+    );
   }
-  const reader = new FileReader();
-  return await new Promise<string>((resolve) => {
-    reader.onload = (event) => {
-      let result = event.target?.result;
-      if (typeof result !== 'string') {
-        console.warn('FileReader result is not a string, performing cast', result);
-        result = result ? JSON.stringify(result) : '';
-      }
-      resolve(result);
-    };
-    reader.onerror = (error) => {
-      console.error('FileReader error:', error);
-      resolve('');
-    };
-    reader.readAsDataURL(blob);
-  });
+  return { blob, bytes, format };
 }
 
 /**

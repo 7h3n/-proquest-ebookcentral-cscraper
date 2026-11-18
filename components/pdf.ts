@@ -1,19 +1,56 @@
 import { jsPDF } from 'jspdf';
 
 import type { Book } from './types';
-import { fetchAsBlob, getActiveTab, PageFetchError } from './utils';
+import type { ImageFormat } from './utils';
+import { fetchPageImage, getActiveTab, PageFetchError } from './utils';
 
 /**
  * jsPDF builds the whole document as ONE string, and Chrome caps a string at ~512MB
  * ("RangeError: Invalid string length"). Images are almost all of that size, so a new file is
- * started once the images already in the current one reach this many bytes. Splitting by
- * page count doesn't work: zoomed-in pages are much bigger images than normal ones.
+ * started once the image data stored in the current one reaches this many bytes.
  * The ~360MB of headroom left covers the rest of the PDF structure.
  */
 const MAX_IMAGE_BYTES_PER_FILE = 150 * 1024 * 1024;
 
-/** Byte size of the data behind a base64 data URL, without decoding it */
-const dataURLBytes = (dataURL: string) => Math.floor(((dataURL.length - dataURL.indexOf(',') - 1) * 3) / 4);
+type StoredImage = { data?: string; sMask?: string };
+
+/**
+ * How many bytes of image data jsPDF is holding for this document.
+ * Measured from what jsPDF actually stores, because that can be far bigger than the downloaded
+ * file (a PNG is decoded and re-encoded), so the size of the download can't be used as a guess.
+ */
+export function storedImageBytes(pdf: jsPDF): number {
+  const collections = (pdf.internal as unknown as { collections?: Record<string, Record<string, StoredImage>> })
+    .collections;
+  const images = collections?.addImage_images ?? {};
+  return Object.values(images).reduce(
+    (total, image) => total + (image.data?.length ?? 0) + (image.sMask?.length ?? 0),
+    0,
+  );
+}
+
+/** Add one page image to the document, scaled to fit an A4 page and centred */
+export function addImagePage(
+  pdf: jsPDF,
+  image: { bytes: Uint8Array; format: ImageFormat; width: number; height: number },
+  newPage: boolean,
+) {
+  if (newPage) {
+    pdf.addPage();
+  }
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const ratio = Math.min(pageWidth / image.width, pageHeight / image.height);
+  const scaledWidth = image.width * ratio;
+  const scaledHeight = image.height * ratio;
+  const offsetX = (pageWidth - scaledWidth) / 2;
+  const offsetY = (pageHeight - scaledHeight) / 2;
+
+  // The original file bytes go in directly, so JPEGs are embedded unchanged (no quality loss).
+  // 'FAST' matters for PNG: without a compression setting jsPDF stores PNG pages as raw,
+  // uncompressed pixels, which is easily 100x bigger than the file and overflows the string limit.
+  pdf.addImage(image.bytes, image.format, offsetX, offsetY, scaledWidth, scaledHeight, undefined, 'FAST');
+}
 
 export async function createPDF(
   book: Book,
@@ -49,25 +86,25 @@ export async function createPDF(
 
     let pdf = new jsPDF('p', 'pt', 'a4'); // portrait, points, A4 size
     let pagesInFile = 0; // pages actually added to the current file
-    let bytesInFile = 0; // image bytes already in the current file
     let fileIndex = 1;
     let firstPageOfFile = 1; // position (1-based) in the capture list where the current file starts
     let stoppedAtPage: number | null = null; // set when a page can't be downloaded and we give up
+    const formatsSeen = new Map<ImageFormat, number>();
 
     // Save the current file, then start a fresh jsPDF so the finished one can be garbage-collected
     const savePart = async (lastPageOfFile: number) => {
-      // The number of files isn't known in advance any more (it depends on image sizes)
+      // The number of files isn't known in advance (it depends on image sizes)
       const isWholeBook = fileIndex === 1 && firstPageOfFile === 1 && lastPageOfFile === totalPages;
       const filename = isWholeBook
         ? `${title}_${totalPages}pages.pdf`
         : `${title}_part${String(fileIndex).padStart(2, '0')}_p${firstPageOfFile}-${lastPageOfFile}.pdf`;
 
-      onLog?.(`Saving file ${fileIndex} (${Math.round(bytesInFile / 1024 / 1024)}MB of images): ${filename}`);
+      const megabytes = Math.round(storedImageBytes(pdf) / 1024 / 1024);
+      onLog?.(`Saving file ${fileIndex} (${megabytes}MB of images): ${filename}`);
       pdf.save(filename);
 
       pdf = new jsPDF('p', 'pt', 'a4');
       pagesInFile = 0;
-      bytesInFile = 0;
       fileIndex++;
       firstPageOfFile = lastPageOfFile + 1;
 
@@ -79,57 +116,25 @@ export async function createPDF(
       onLog?.(`Processing page ${processed + 1} of ${totalPages}`);
 
       try {
-        const blobURI = await fetchAsBlob(pageUrl);
-        const pageBytes = dataURLBytes(blobURI);
+        const image = await fetchPageImage(pageUrl);
+        formatsSeen.set(image.format, (formatsSeen.get(image.format) ?? 0) + 1);
 
-        // Close the current file first if this page would push it over the size budget
-        if (pagesInFile > 0 && bytesInFile + pageBytes > MAX_IMAGE_BYTES_PER_FILE) {
-          await savePart(processed);
+        let bitmap: ImageBitmap;
+        try {
+          bitmap = await createImageBitmap(image.blob);
+        } catch {
+          throw new Error(`the ${image.format} image is damaged and can't be opened, skipping it`);
         }
-        const img = new Image();
-        img.src = blobURI;
+        const { width, height } = bitmap;
+        bitmap.close();
 
-        await new Promise<void>((imgLoadResolve) => {
-          let lastBlobUrl: string | null = null;
+        addImagePage(pdf, { ...image, width, height }, pagesInFile > 0);
+        pagesInFile++;
 
-          img.onload = () => {
-            const imgWidth = img.width;
-            const imgHeight = img.height;
-
-            if (pagesInFile > 0) {
-              pdf.addPage();
-            }
-            pagesInFile++;
-            bytesInFile += pageBytes;
-
-            // Calculate dimensions to fit the page
-            const pageWidth = pdf.internal.pageSize.getWidth();
-            const pageHeight = pdf.internal.pageSize.getHeight();
-            const ratio = Math.min(pageWidth / imgWidth, pageHeight / imgHeight);
-            const scaledWidth = imgWidth * ratio;
-            const scaledHeight = imgHeight * ratio;
-
-            const offsetX = (pageWidth - scaledWidth) / 2;
-            const offsetY = (pageHeight - scaledHeight) / 2;
-
-            pdf.addImage(img, 'JPEG', offsetX, offsetY, scaledWidth, scaledHeight);
-
-            //Free blobs after images are added to prevent memory overload
-            //Queue last cycle's blob otherwise errors are thrown
-            if (lastBlobUrl) {
-              URL.revokeObjectURL(lastBlobUrl);
-            }
-            lastBlobUrl = img.src;
-
-            imgLoadResolve();
-          };
-          img.onerror = () => {
-            const err = `Failed to load image: ${pageUrl}`;
-            onLog?.(err);
-            onError?.(err);
-            imgLoadResolve();
-          };
-        });
+        // Close this file once it holds enough image data; the next page starts a new one
+        if (storedImageBytes(pdf) >= MAX_IMAGE_BYTES_PER_FILE) {
+          await savePart(processed + 1);
+        }
       } catch (err: unknown) {
         if (err instanceof PageFetchError) {
           // The session has most likely expired, so every later page would fail too.
@@ -159,6 +164,10 @@ export async function createPDF(
         const seconds = Math.ceil((remaining % 60000) / 1000);
         onEstimatedTime(`${minutes}m ${seconds}s`);
       }
+    }
+
+    if (formatsSeen.size > 0) {
+      onLog?.(`Page image formats: ${[...formatsSeen].map(([format, count]) => `${format} x${count}`).join(', ')}`);
     }
 
     // Save whatever is left (the last, possibly shorter, file)
