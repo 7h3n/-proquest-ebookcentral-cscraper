@@ -1,6 +1,6 @@
 # eBook Scraper
 
-> **Requires Node.js 22:** download it from **https://nodejs.org/en/download** (pick **v22.x**).
+> **Requires Node.js 22:** **https://nodejs.org/en/download** (pick **v22.x**).
 
 A browser extension that saves books from **ProQuest Ebook Central** and **JStor** as PDF. Forked from [janbaykara/ebook-scraper](https://github.com/janbaykara/ebook-scraper).
 
@@ -27,14 +27,13 @@ After changing the code, run the build again and click **Reload** on the extensi
 
 ## Use
 
-1. Log in to your library and open a book.
-2. Turn through the pages: each page is captured once it loads.
-3. Click the extension icon, then **Download PDF**.
+1. Turn through the pages: each page is captured once it loads (only works on PDF mode).
+2. Click the extension icon, then **Download PDF**.
 
 ![Popup](screenshot2.png)
 
 - Large books are saved as several files (`<title>_part01_p1-120.pdf`, …) so the browser doesn't run out of memory.
-- If a page fails to download (usually an expired library login), the extension stops and saves the pages before it as a PDF. To get the rest: reload the book (log in again if asked), press **Reset** to clear the old, expired captures, turn through the pages again from the failed page, and download. This gives a second PDF; merge the two afterwards.
+- If a page fails to download (usually an expired library login), the extension stops and saves the pages before it as a PDF. To get the rest: reload the page, press **Reset**, turn through the pages again from the failed page.
 
 ## License
 
